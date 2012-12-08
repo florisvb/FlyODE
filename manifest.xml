@@ -1,0 +1,18 @@
+<package>
+  <description brief="FlyODE">
+
+     FlyODE
+
+  </description>
+  <author>Floris van Breugel</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/FlyODE</url>
+  <depend package="roscpp"/>
+  <depend package="sensor_msgs"/>
+  <depend package="rospy" />
+  <depend package="std_msgs" />
+
+</package>
+
+
