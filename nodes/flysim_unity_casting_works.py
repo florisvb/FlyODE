@@ -27,9 +27,9 @@ config = {  'body_mass': 1, # mg
             'antenna_radius': 1e-1,
             'arista_length': 1,
             'arista_radius': 1e-1,
-            'head_body_hinge_F': 1000,
-            'antenna_head_hinge_F': 1000,
-            'arista_antenna_hinge_F': 1000,
+            'head_body_hinge_F': 1000000,
+            'antenna_head_hinge_F': 10000,
+            'arista_antenna_hinge_F': 100000,
          }
 
 def coord(x,y,field_of_view=100,window_size=(640,480)): # field of view in m
@@ -123,7 +123,7 @@ class FlyModel(object):
         #self.joint_antenna_l_head.setParam(ode.ParamVel, 0)
         self.joint_antenna_l_head.setParam(ode.ParamFMax, config['antenna_head_hinge_F'])
         self.joint_antenna_l_head.setParam(ode.ParamLoStop, -0.01)
-        self.joint_antenna_l_head.setParam(ode.ParamHiStop, np.pi/5.5)
+        self.joint_antenna_l_head.setParam(ode.ParamHiStop, np.pi/10)
         # Arista
         fly_arista_l = ode.Body(world)
         fly_arista_l.setMass(M_head)
@@ -161,7 +161,7 @@ class FlyModel(object):
             self.joint_antenna_r_head.setAxis((0,0,1))
             #self.joint_antenna_r_head.setParam(ode.ParamVel, 0)
             self.joint_antenna_r_head.setParam(ode.ParamFMax, config['antenna_head_hinge_F'])
-            self.joint_antenna_r_head.setParam(ode.ParamLoStop, -np.pi/5.5)
+            self.joint_antenna_r_head.setParam(ode.ParamLoStop, -np.pi/10)
             self.joint_antenna_r_head.setParam(ode.ParamHiStop, .01)
             # Arista
             fly_arista_r = ode.Body(world)
@@ -182,6 +182,10 @@ class FlyModel(object):
             self.joint_arista_antenna_r.setParam(ode.ParamFMax, config['arista_antenna_hinge_F'])
             self.joint_arista_antenna_r.setFeedback(True)
             
+            
+        #self.joint_arista_antenna_l.setParam(ode.ParamStopCFM, 2)
+        #elf.joint_arista_antenna_r.setParam(ode.ParamStopCFM, 2)
+            
         self.slipangle = 0
         self.rand_slip_offset = np.pi/6.
         self.antenna_difference_history = []
@@ -198,6 +202,7 @@ class FlyModel(object):
         
         self.arista_l_sensor_lowpass = 0
         self.arista_l_torque_lowpass = 0
+        self.antenna_difference_lowpassed = 0
         
         self.arista_l_sensor_history = []
         
@@ -226,7 +231,7 @@ class FlyModel(object):
     def save_joy(self, Joy):
         self.joy = Joy
         
-    def apply_joy_forces(self):
+    def apply_joy_forces(self, wind=(0,0,0)):
         if self.joy is None:
             return 
         
@@ -245,13 +250,17 @@ class FlyModel(object):
         rand = self.rand_slip_offset #0#(np.random.random()*2 -1)*np.pi/2.
         self.slipangle = 0#np.pi/2.*0.3#np.abs(rand) #self.rand_slip_offset
         
-        if self.joy.buttons[13] > 0:
-            antenna_difference = fly.joint_arista_antenna_l.getFeedback()[3][2] - -1*fly.joint_arista_antenna_r.getFeedback()[3][2]
-            print antenna_difference
+        if 1:# self.joy.buttons[13] > 0:
+            force_drag_l, force_drag_r = self.apply_aero_arista(wind=wind, apply_forces=False)
+            antenna_difference = -1*(force_drag_l + force_drag_r)
+            #if np.abs(antenna_difference) > 3:
+            #    antenna_difference = np.sign(antenna_difference)*3
+            #print fly.joint_arista_antenna_l.getFeedback()[3][2]
         else:
             antenna_difference = 0
             
-        self.antenna_difference_history.append(antenna_difference)
+        self.antenna_difference_lowpassed += 0.9*(antenna_difference - self.antenna_difference_lowpassed)
+        self.antenna_difference_history.append(self.antenna_difference_lowpassed)
         
         history_length = 20
         if len(self.antenna_difference_history) > history_length:
@@ -260,13 +269,28 @@ class FlyModel(object):
             antenna_difference_integral = 0
             
         #print self.joint_arista_antenna_l.getFeedback()[3][2] - -1*self.joint_arista_antenna_r.getFeedback()[3][2], self.slipangle, antenna_difference_integral
-        #print self.slipangle + -0.8*antenna_difference_integral
+        #print self.get_arista_orientation_l()-self.get_body_orientation(), self.get_arista_orientation_r()-self.get_body_orientation()
+        
+        #print self.arista_l.getLinearVel()[0], self.arista_r.getLinearVel()[0], self.body.getLinearVel()[0]
+        
+         
+        groundspeed = self.body.getLinearVel()
+        airspeed = np.array(groundspeed) - np.array(wind)
+        airspeed_mag = np.linalg.norm(airspeed)
         
         if len(self.antenna_difference_history) > 2:
             #control = -0.1*antenna_difference_integral-0.05*antenna_difference -0.0*(self.body.getAngularVel()[2])#+ self.joy.axes[0]*100
-            control = -0.05*antenna_difference_integral-0.1*antenna_difference -0.0*(self.body.getAngularVel()[2])#+ self.joy.axes[0]*100
+            #control = -0.6*antenna_difference_integral-0.1*antenna_difference -0.0*(self.body.getAngularVel()[2])#+ self.joy.axes[0]*100
+            control = -0*airspeed_mag*antenna_difference_integral -0.5*airspeed_mag*self.antenna_difference_lowpassed# -0.05*antenna_difference_integral-0.1*antenna_difference -0.0*(self.body.getAngularVel()[2])#+ self.joy.axes[0]*100
         else:
             control = 0
+            
+        
+        if np.abs(control) > np.pi/2.:
+            control = np.sign(control)*np.pi/2.
+        
+        
+        print thrust*np.sin(flymath.fix_angular_rollover(self.slipangle+control)),thrust*np.abs(np.cos(flymath.fix_angular_rollover(self.slipangle+control))), control
             
         ###
         vel_ori = np.arctan2(self.body.getLinearVel()[1],self.body.getLinearVel()[0])
@@ -276,7 +300,7 @@ class FlyModel(object):
         
         #print (self.body.getLinearVel()[1])
             
-        self.body.addRelForce((thrust*np.sin(self.slipangle+control),thrust*np.abs(np.cos(self.slipangle+control)),0))
+        self.body.addRelForce((thrust*np.sin(flymath.fix_angular_rollover(self.slipangle+control)),thrust*np.abs(np.cos(flymath.fix_angular_rollover(self.slipangle+control))),0))
         self.body.addRelTorque((0,0,yaw))
         self.joint_antenna_l_head.setParam(ode.ParamVel, antenna_left_vel)
         self.joint_antenna_r_head.setParam(ode.ParamVel, antenna_right_vel)
@@ -284,9 +308,14 @@ class FlyModel(object):
         if self.joy.buttons[12]:
             self.hover()
             
-    def cast(self, sign=-1):
-        self.body.addRelTorque((0,0,sign*(self.body.getLinearVel()[1])))
+            
+        # control head
+        self.joint_head_body.addTorque(-1000*self.joint_head_body.getAngle())
         
+        # control arista
+        self.joint_arista_antenna_l.addTorque(-100*self.joint_arista_antenna_l.getAngle())
+        self.joint_arista_antenna_r.addTorque(-100*self.joint_arista_antenna_r.getAngle())
+            
     def hover(self):
         #self.body.addRelTorque((0,0,1*(self.body.getLinearVel()[0])))
         
@@ -303,8 +332,12 @@ class FlyModel(object):
             else:
                 visual_slip_integral = 0
                 
+                
+            groundspeed = self.body.getLinearVel()
+            airspeed = np.array(groundspeed) - np.array(wind)
+            airspeed_mag = np.linalg.norm(airspeed)
             
-            control = -0*visual_slip_integral + -80*self.visual_slip_hover_history[-1]- 10*body_ori_dot
+            control = -10*airspeed_mag*self.visual_slip_hover_history[-1]- 50*body_ori_dot
             
             self.body.addRelTorque((0,0,control))
             
@@ -313,35 +346,6 @@ class FlyModel(object):
             #self.body.addRelForce((0,-50*(vel_comp_in_direc_of_travel-10),0))
         
         
-    def drive_antenna_to_zero(self):
-        self.arista_l_sensor_history.append(self.arista_l.getAngularVel()[2])
-        
-        if len(self.arista_l_sensor_history) > 20:
-            arista_integral = np.sum(self.arista_l_sensor_history[-5:-1]) / 4
-        else:
-            arista_integral = 0
-        
-        if np.abs(self.body.getAngularVel()[2]) > 1e-1: 
-            self.joint_antenna_l_head.setParam(ode.ParamVel, -2*self.arista_l_sensor_history[-1])
-        else:
-            antenna_left_vel = -5*(self.joy.axes[12])
-            self.joint_antenna_l_head.setParam(ode.ParamVel, antenna_left_vel)
-            
-        body_ori = self.get_body_orientation()
-        arista_ori = self.get_arista_orientation_l()
-        body_ori_dot = self.body.getAngularVel()[2]
-        
-        torque_dot = self.joint_arista_antenna_l.getFeedback()[3][2] - self.arista_l_torque_lowpass
-        self.arista_l_torque_lowpass += 0.8*(self.joint_arista_antenna_l.getFeedback()[3][2] - self.arista_l_torque_lowpass)
-        
-        v_est = torque_dot / (np.cos(body_ori)*body_ori_dot*np.cos(arista_ori+body_ori) + np.sin(body_ori)*body_ori_dot*np.sin(arista_ori+body_ori)) 
-        
-        #print self.arista_l.getAngularVel()[2] - self.body.getAngularVel()[2]
-
-        #if np.abs(body_ori_dot) > 1e-3 and np.abs(self.arista_l.getAngularVel()[2]) < 1e-3:
-        #    print v_est, self.arista_l.getAngularVel()[2]
-         
-        print self.joint_antenna_l_head.getParam(ode.ParamVel)
                 
     def apply_aero_body(self, wind=(0,0,0)):
         
@@ -362,26 +366,33 @@ class FlyModel(object):
         
         self.body.addTorque((0,0,-10*self.body.getAngularVel()[2]))
         
-    def apply_aero_arista(self, wind=(0,0,0)):
+    def apply_aero_arista(self, wind=(0,0,0), apply_forces=True):
     
         # dot product of airspeed and orientation
-    
+        groundspeed = self.body.getLinearVel()
+        
         # LEFT
-        groundspeed = self.arista_l.getLinearVel()
+        #groundspeed = self.arista_l.getLinearVel()
         airspeed = np.array(groundspeed) - np.array(wind)
         ori_vec = np.array([np.cos(self.get_arista_orientation_l()), np.sin(self.get_arista_orientation_l()), 0])
         weight = 9.81*config['arista_mass']
-        force_drag = -0.8*weight/1.*np.cross(airspeed, ori_vec)[2]
-        self.arista_l.addRelForce((force_drag,0,0))
-        #self.arista_l.addRelForce((0,0,0))
+        force_drag = -0.5*weight/1.*np.sign(np.cross(airspeed, ori_vec)[2])*np.abs(np.cross(airspeed, ori_vec)[2])
+        force_drag_l = force_drag
+        if apply_forces:
+            self.arista_l.addRelForce((force_drag,0,0))
         
         # RIGHT
-        groundspeed = self.arista_r.getLinearVel()
+        #groundspeed = self.arista_r.getLinearVel()
         airspeed = np.array(groundspeed) - np.array(wind)
         ori_vec = np.array([np.cos(self.get_arista_orientation_r()), np.sin(self.get_arista_orientation_r()), 0])
         weight = 9.81*config['arista_mass']
-        force_drag = -0.8*weight/1.*np.cross(airspeed, ori_vec)[2]
-        self.arista_r.addRelForce((force_drag,0,0))
+        force_drag = -0.5*weight/1.*np.sign(np.cross(airspeed, ori_vec)[2])*np.abs(np.cross(airspeed, ori_vec)[2])
+        force_drag_r = force_drag 
+        if apply_forces:
+            self.arista_r.addRelForce((force_drag,0,0))
+        
+        if not apply_forces:
+            return force_drag_l, force_drag_r
         
     def draw(self, srf, window_size):
         
@@ -420,6 +431,8 @@ srf = pygame.display.set_mode(window_size)
 # Create a world object
 world = ode.World()
 world.setGravity((0,0,0))
+#world.setERP(0.6)
+#world.setCFM(.01)
 
 fly = FlyModel(world, dt)
 
@@ -442,25 +455,16 @@ while loopFlag:
     # Draw fly
     fly.draw(srf, window_size)
     
-    fly.apply_joy_forces()
-    #
-    
-    fly.apply_aero_body(wind=(-10,-10,0))
-    fly.apply_aero_arista(wind=(-10,-10,0))
+    wind=(-20,-20,0)
+    #wind = (0,0,0)
+    fly.apply_joy_forces(wind=wind)
+    fly.apply_aero_body(wind=wind)
+    fly.apply_aero_arista(wind=wind)
     
     torque_left = fly.joint_arista_antenna_l.getFeedback()[3][2]
     alpha = 0.9
     fly.arista_l_sensor_lowpass = fly.arista_l_sensor_lowpass + alpha*(torque_left-fly.arista_l_sensor_lowpass)
     
-    if 0:
-        if fly.joy is not None:
-            if fly.joy.buttons[13]:
-                fly.drive_antenna_to_zero()
-                #fly.hover()
-            
-    #print (fly.arista_r.getQuaternion()[3]*2+np.pi/2.)*180/np.pi, (fly.arista_l.getQuaternion()[3]*2+np.pi/2.)*180/np.pi
-    #print fly.get_body_orientation()*180/np.pi
-    #print fly.arista_r.getQuaternion(), -1*(np.arccos(fly.arista_r.getQuaternion()[3])*2 - np.pi/180.*270)*180/np.pi
     
     
     
