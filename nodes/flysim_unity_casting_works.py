@@ -22,19 +22,19 @@ clk = pygame.time.Clock()
 
 # UNITS: mm, mg, sec
 
-config = {  'body_mass': 1, # mg
-            'head_mass': 1e-2, 
-            'antenna_mass': 1e-3,
-            'arista_mass': 1e-3,
+config = { 'body_mass': 1, # mg
+            'head_mass': 1e-6,
+            'antenna_mass': 1e-9,
+            'arista_mass': 1e-9,
             'body_radius': 1, # mm
             'head_radius': 1,
             'antenna_radius': 1e-1,
             'arista_length': 1,
             'arista_radius': 1e-1,
             'head_body_hinge_F': 1000000,
-            'antenna_head_hinge_F': 10000,
+            'antenna_head_hinge_F': 1e-2,
             'arista_antenna_hinge_F': 100000,
-            'antenna_max_angle': np.pi/10.,
+            'antenna_max_angle': np.pi/12.,
             'antenna_initial_angle': 30*np.pi/180.,
          }
 
@@ -227,14 +227,14 @@ class FlyModel(object):
         if sign == 0:
             sign = 1
         woundup = (np.arccos(self.arista_l.getQuaternion()[0])*2)*sign+np.pi/2.
-        return flymath.fix_angular_rollover(woundup) 
+        return flymath.fix_angular_rollover(woundup)
         
     def get_arista_orientation_r(self):
         sign = np.sign(self.arista_r.getQuaternion()[3])
         if sign == 0:
             sign = 1
         woundup = (np.arccos(self.arista_r.getQuaternion()[0])*2)*sign+np.pi/2.
-        return flymath.fix_angular_rollover(woundup) 
+        return flymath.fix_angular_rollover(woundup)
     
     def save_joy(self, Joy):
         self.joy = Joy
@@ -253,7 +253,7 @@ class FlyModel(object):
         
     def apply_forces(self, wind=(0,0,0)):
         if self.joy is None:
-            return 
+            return
         
         thrust = self.joystick_thrust + self.thrust
         yaw = self.joystick_yaw + self.yaw
@@ -274,15 +274,17 @@ class FlyModel(object):
         
         # Calculate antenna controls
         force_drag_l, force_drag_r = self.apply_aero_arista(wind=wind, apply_forces=False)
-        antenna_difference = -1*(force_drag_l + force_drag_r)
+        antenna_difference = -100000*(force_drag_l + force_drag_r)
         self.antenna_difference_lowpassed += 0.9*(antenna_difference - self.antenna_difference_lowpassed)
         control = -0.5*airspeed_mag*self.antenna_difference_lowpassed # gain scheduled proportional controller
         # set control limits
         if np.abs(control) > np.pi/2.:
             control = np.sign(control)*np.pi/2.
+            
         
         # Apply forces
         self.body.addRelForce((thrust*np.sin(flymath.fix_angular_rollover(self.slipangle+control)),thrust*np.abs(np.cos(flymath.fix_angular_rollover(self.slipangle+control))),0))
+        print control
         self.body.addRelTorque((0,0,yaw))
         self.joint_antenna_l_head.setParam(ode.ParamVel, antenna_left_vel)
         self.joint_antenna_r_head.setParam(ode.ParamVel, antenna_right_vel)
@@ -363,7 +365,7 @@ class FlyModel(object):
         ori_vec = np.array([np.cos(self.get_arista_orientation_r()), np.sin(self.get_arista_orientation_r()), 0])
         weight = 9.81*config['arista_mass']
         force_drag = -0.5*weight/1.*np.sign(np.cross(airspeed, ori_vec)[2])*np.abs(np.cross(airspeed, ori_vec)[2])
-        force_drag_r = force_drag 
+        force_drag_r = force_drag
         if apply_forces:
             self.arista_r.addRelForce((force_drag,0,0))
         
@@ -441,5 +443,5 @@ while loopFlag:
     # Next simulation step
     world.step(dt)
 
-    # Try to keep the specified framerate    
+    # Try to keep the specified framerate
     clk.tick(fps)
